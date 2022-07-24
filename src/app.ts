@@ -1,3 +1,15 @@
+//Drag & Drop Interfaces
+interface Draggable {
+  dragStartHandler(event: DragEvent): void;
+  dragEndHandler(event: DragEvent): void;
+}
+
+interface DragTarget {
+  dragOverHandler(event: DragEvent): void;
+  dropHandler(event: DragEvent): void;
+  dragLeaveHandler(event: DragEvent): void;
+}
+
 // Project Type
 enum ProjectStatus {
   Active,
@@ -15,32 +27,32 @@ class Project {
 }
 
 // Project State Management
+type Listener<T> = (items: T[]) => void;
 
-type Listener = (items: Project[]) => void;
+class State<T> {
+  protected listeners: Listener<T>[] = [];
 
-class ProjectState {
-  private listeners: Listener[] = [];
+  addListener(listenerFn: Listener<T>) {
+    this.listeners.push(listenerFn);
+  }
+}
+
+class ProjectState extends State<Project> {
   private projects: Project[] = [];
   private static instance: ProjectState;
 
-  private constructor() {}
-  //   new 키워드 막음
+  private constructor() {
+    super();
+  }
 
   static getInstance() {
     if (this.instance) {
       return this.instance;
     }
-    // 있다면 원래 것 반환
     this.instance = new ProjectState();
     return this.instance;
-    // 없다면 만듦
   }
 
-  addListener(listenerFn: Listener) {
-    this.listeners.push(listenerFn);
-  }
-
-  //   여기서 데이터 받음
   addProject(title: string, description: string, numOfPeople: number) {
     const newProject = new Project(
       Math.random.toString(),
@@ -50,19 +62,25 @@ class ProjectState {
       ProjectStatus.Active
     );
     this.projects.push(newProject);
-    // projects 배열에 객체 저장
+    this.updateListeners();
+  }
+
+  moveProject(projectId: string, newStatus: ProjectStatus) {
+    const project = this.projects.find((prj) => prj.id === projectId);
+    if (project && project.status !== newStatus) {
+      project.status = newStatus;
+      this.updateListeners();
+    }
+  }
+
+  private updateListeners() {
     for (const listenerFn of this.listeners) {
       listenerFn(this.projects.slice());
-      // 리스트에 보내기
-
-      // 원본보호 복사
-      // 복사
     }
   }
 }
 
 const projectState = ProjectState.getInstance();
-// 하나의 인스턴스만 생성 가능~~~~!!
 
 // Validation
 interface Validatable {
@@ -74,14 +92,11 @@ interface Validatable {
   max?: number;
 }
 
-// 유효성 검사 함수
-// 재사용이 가능하게 함수로 작성
 function validate(validatableInput: Validatable) {
   let isValid = true;
   if (validatableInput.required) {
     isValid = isValid && validatableInput.value.toString().trim().length !== 0;
   }
-  //   0이더라도 확인
   if (
     validatableInput.minLength != null &&
     typeof validatableInput.value === 'string'
@@ -110,9 +125,7 @@ function validate(validatableInput: Validatable) {
   }
   return isValid;
 }
-// != 하나는 null 과 undifined 모두 포함
 
-// autobind decorator
 function autobind(
   _target: any,
   _methodName: string,
@@ -128,80 +141,178 @@ function autobind(
   };
   return adjDescriptor;
 }
-// adjDescriptor이 origianl을 덮어씀
 
-// ProjectList Class
-class ProjectList {
+//Component Base Class
+// - 렌더링 기능
+// 추상 클래스 인스턴스화를 막고 상속만 (extends).
+// 상속에서 구현
+abstract class Component<T extends HTMLElement, U extends HTMLElement> {
   templateElement: HTMLTemplateElement;
-  hostElement: HTMLDivElement;
-  element: HTMLElement; // <section>
-  assignedProjects: Project[];
-  //   폼에 작성 받은 입력값 state에서 꺼내오기
+  hostElement: T;
+  element: U;
 
-  //  미완료시 active
-  //  완료시 finished
-  constructor(private type: 'active' | 'finished') {
+  // 동일
+  // newElement?:string
+  // newElement:string|undifined
+  constructor(
+    templateId: string,
+    hostElementId: string,
+    insertAtStart: boolean,
+    newElementId?: string //!! 필수 매개변수는 선택적 매개변수 다음에 올 수 없다.
+  ) {
     this.templateElement = document.getElementById(
-      'project-list'
+      templateId
     )! as HTMLTemplateElement;
-    this.hostElement = document.getElementById('app')! as HTMLDivElement;
-    this.assignedProjects = [];
+    this.hostElement = document.getElementById(hostElementId)! as T;
 
     const importedNode = document.importNode(
       this.templateElement.content,
       true
     );
 
-    this.element = importedNode.firstElementChild as HTMLElement;
-    this.element.id = `${this.type}-projects`;
+    this.element = importedNode.firstElementChild as U;
+    if (newElementId) {
+      this.element.id = newElementId;
+    }
 
-    // state에서 (입력받은)목록들 받아오기
+    this.attach(insertAtStart);
+  }
+
+  private attach(insertAtBeginning: boolean) {
+    this.hostElement.insertAdjacentElement(
+      insertAtBeginning ? 'afterbegin' : 'beforeend',
+      this.element
+    );
+  }
+
+  abstract configure?(): void;
+  abstract renderContent(): void;
+  // 구현내용과 구성은 상속단계에서 이뤄짐
+  // 생성자 함수에 따라 해당 메소드가 좌우되기 때문에 동작이 달라질 수 있음.
+}
+
+// ProjectItem Class
+class ProjectItem
+  extends Component<HTMLUListElement, HTMLLIElement>
+  implements Draggable
+{
+  private project: Project;
+
+  //  보통 필드 아래 게터 세터 작성
+  get persons() {
+    if (this.project.people === 1) {
+      return '1 person';
+    } else {
+      return `${this.project.people} persons`;
+    }
+  }
+
+  constructor(hostId: string, project: Project) {
+    super('single-project', hostId, false, project.id);
+    this.project = project;
+
+    this.configure();
+    this.renderContent();
+  }
+
+  @autobind
+  dragStartHandler(event: DragEvent) {
+    event.dataTransfer!.setData('text/plain', this.project.id);
+    event.dataTransfer!.effectAllowed = 'move';
+    // 제거->이동
+  }
+
+  dragEndHandler(_: DragEvent) {
+    console.log('Dragged');
+  }
+
+  configure() {
+    this.element.addEventListener('dragstart', this.dragStartHandler);
+    this.element.addEventListener('dragend', this.dragEndHandler);
+  }
+
+  renderContent() {
+    this.element.querySelector('h2')!.textContent = this.project.title;
+    this.element.querySelector('h3')!.textContent = this.persons + ' assigned.';
+    this.element.querySelector('p')!.textContent = this.project.description;
+  }
+}
+
+// ProjectList Class
+class ProjectList
+  extends Component<HTMLDivElement, HTMLElement>
+  implements DragTarget
+{
+  assignedProjects: Project[];
+
+  constructor(private type: 'active' | 'finished') {
+    super('project-list', 'app', false, `${type}-projects`);
+    this.assignedProjects = [];
+
+    this.configure();
+    this.renderContent();
+  }
+
+  @autobind
+  dragOverHandler(event: DragEvent) {
+    if (event.dataTransfer && event.dataTransfer.types[0] === 'text/plain') {
+      event.preventDefault();
+      //js의 드래그 앤 드롭 이벤트의 디폴트는 드로핑을 허용하지 않음
+      const listEl = this.element.querySelector('ul')!;
+      listEl.classList.add('droppable');
+    }
+    // 드래그 시 배경 색상 변경
+  }
+
+  @autobind
+  dropHandler(event: DragEvent) {
+    const prjId = event.dataTransfer!.getData('text/plain');
+    projectState.moveProject(
+      prjId,
+      this.type === 'active' ? ProjectStatus.Active : ProjectStatus.Finished
+    );
+  }
+
+  @autobind
+  dragLeaveHandler(_: DragEvent) {
+    const listEl = this.element.querySelector('ul')!;
+    listEl.classList.remove('droppable');
+  }
+  // 드래그 leave 시 배경 색상 변경
+
+  configure() {
+    this.element.addEventListener('dragover', this.dragOverHandler);
+    this.element.addEventListener('dragleave', this.dragLeaveHandler);
+    this.element.addEventListener('drop', this.dropHandler);
+
+    // 싱글톤으로 생성된 인스턴스
     projectState.addListener((projects: Project[]) => {
       const relevantProjects = projects.filter((prj) => {
         if (this.type === 'active') {
           return prj.status === ProjectStatus.Active;
         }
-        return prj.status === ProjectStatus.Active;
+        return prj.status === ProjectStatus.Finished;
       });
       this.assignedProjects = relevantProjects;
       this.renderProjects();
     });
+  }
 
-    this.attach();
-    this.renderContent();
+  renderContent() {
+    const listId = `${this.type}-projects-list`;
+    this.element.querySelector('ul')!.id = listId;
+    this.element.querySelector('h2')!.textContent =
+      this.type.toUpperCase() + 'PROJECTS';
   }
 
   private renderProjects() {
     const listEl = document.getElementById(
       `${this.type}-projects-list`
     )! as HTMLUListElement;
-    // <ul>
-
     listEl.innerHTML = '';
-    // 지우고 다시 랜더링 새로운 변경만 렌더링 X
-
-    // 할당 받은 값 for문 돌기
     for (const prjItem of this.assignedProjects) {
-      const listItem = document.createElement('li');
-      listItem.textContent = prjItem.title;
-      listEl.appendChild(listItem);
+      new ProjectItem(this.element.querySelector('ul')!.id, prjItem);
     }
-  }
-
-  // render
-  // h2
-  // ul
-  private renderContent() {
-    const listId = `${this.type}-projects-list`;
-    this.element.querySelector('ul')!.id = listId;
-    // <ul> 파라미터로 받은 type 값으로 id 기입
-    this.element.querySelector('h2')!.textContent =
-      this.type.toUpperCase() + 'PROJECTS';
-    // <h2> 텍스트 넣기
-  }
-
-  private attach() {
-    this.hostElement.insertAdjacentElement('beforeend', this.element);
   }
 }
 
@@ -210,37 +321,13 @@ class ProjectList {
 // template 1 project-input
 // template 2 single-project
 
-class ProjectInput {
-  templateElement: HTMLTemplateElement;
-  hostElement: HTMLDivElement;
-  element: HTMLFormElement;
+class ProjectInput extends Component<HTMLDivElement, HTMLFormElement> {
   titleInputElement: HTMLInputElement;
   descriptionInputElement: HTMLInputElement;
   peopleInputElement: HTMLInputElement;
 
   constructor() {
-    this.templateElement = document.getElementById(
-      'project-input'
-    )! as HTMLTemplateElement;
-    //  <template id='project-input'>
-    this.hostElement = document.getElementById('app')! as HTMLDivElement;
-    //  <div id='app'>
-
-    const importedNode = document.importNode(
-      this.templateElement.content,
-      true
-    );
-    // <template id='project-input'>{사이의 것들 가져오기}</template>
-
-    // 깊은 복사를 할 것인지 말 것인지 결정
-    // 요소 사이를 끌어 옴 props.children같은 것
-    // .content === 사이의 것들
-
-    this.element = importedNode.firstElementChild as HTMLFormElement;
-    // <form>
-    this.element.id = 'user-input';
-    // <form id='user-input'>
-
+    super('project-input', 'app', true, 'user-input');
     this.titleInputElement = this.element.querySelector(
       '#title'
     ) as HTMLInputElement;
@@ -250,18 +337,21 @@ class ProjectInput {
     this.peopleInputElement = this.element.querySelector(
       '#people'
     ) as HTMLInputElement;
-    // #id를 지칭함
-
+    // 필드 초기화
     this.configure();
-    this.attach();
   }
 
-  //submit시 받은 사용자 값을 검사, 튜플 return
+  configure() {
+    this.element.addEventListener('submit', this.submitHandler);
+  }
+
+  renderContent() {}
+  //미 작성시 에러
+
   private gatherUserInput(): [string, string, number] | void {
     const enteredTitle = this.titleInputElement.value;
     const enteredDescription = this.descriptionInputElement.value;
     const enteredPeople = this.peopleInputElement.value;
-    //1. 현재 값 받아오기
 
     const titleValidatable: Validatable = {
       value: enteredTitle,
@@ -278,7 +368,6 @@ class ProjectInput {
       min: 1,
       max: 5,
     };
-    //2. 유효성 검사 기준 세우기
 
     if (
       !validate(titleValidatable) ||
@@ -290,8 +379,6 @@ class ProjectInput {
     } else {
       return [enteredTitle, enteredDescription, +enteredPeople];
     }
-
-    //3. 검사에 따른 결과
   }
 
   private clearInputs() {
@@ -304,37 +391,14 @@ class ProjectInput {
   private submitHandler(event: Event) {
     event.preventDefault();
     const userInput = this.gatherUserInput();
-    // 검사가 완료된 튜플
-
-    // => union 타입이라서 타입가드 필요!!!
-    // Javascript
-    // 오버로딩?? 타입가드??
     if (Array.isArray(userInput)) {
       const [title, desc, people] = userInput;
       projectState.addProject(title, desc, people);
-      // 데이터 보내고(싱글톤)
       this.clearInputs();
-      // 창 지우기
     }
-  }
-
-  private configure() {
-    this.element.addEventListener('submit', this.submitHandler);
-  }
-
-  private attach() {
-    this.hostElement.insertAdjacentElement('afterbegin', this.element);
-    // html 삽입 메서드
-    // <div>에 <form> 삽입
-
-    // importedNode를 할당해야 하지만 생성자 함수에서만 사용할 수 있는 상수이고
-    // 확실한 html 요소에 접근해야 함
   }
 }
 
 const proInput = new ProjectInput();
 const activePrjList = new ProjectList('active');
 const finishedPrjList = new ProjectList('finished');
-
-// 복제
-// 필터링
