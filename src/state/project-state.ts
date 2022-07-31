@@ -1,5 +1,4 @@
-import { Project } from '../models/project-model.js'
-import { ProjectStatus } from '../models/project-model'
+import { ProjectStatus, Project } from '../models/project'
 
 // Project State Management
 type Listener<T> = (items: T[]) => void
@@ -54,5 +53,8 @@ export class ProjectState extends State<Project> {
     }
   }
 }
+
+console.log('RUNNING...')
+// 여러번 임포트 되어도 한번만 실행
 
 export const projectState = ProjectState.getInstance()
